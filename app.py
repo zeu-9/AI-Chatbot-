@@ -4,7 +4,7 @@ import re
 import os
 from google import genai
 
-client = genai.Client(api_key="AIzaSyA9r5dJJTz874RXXH-SymA3kbR-LwA23fI")
+client = genai.Client(api_key="YOUR_API_KEY")
 # Load data
 df = pd.read_csv("cleaned_washingmachine.csv")
 
