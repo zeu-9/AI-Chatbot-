@@ -1,123 +1,148 @@
 import streamlit as st
 import pandas as pd
 import re
-import os
-from google import genai
+import requests
 
-client = genai.Client(api_key="YOUR_API_KEY")
-# Load data
+# 🔑 ADD YOUR GROQ KEY
+GROQ_API_KEY = "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"
+
 df = pd.read_csv("cleaned_washingmachine.csv")
 
-# --- FUNCTIONS ---
-import time
+# -------------------------------
+# 🤖 AI RESPONSE
+# -------------------------------
+def generate_ai_response(user_input, recs):
 
-def generate_ai_response(user_input, recommendations):
+    recs_text = ""
+    for _, row in recs.iterrows():
+        recs_text += f"{row['Product Name']} (₹{int(row['Price'])}, Rating: {row['Ratings']})\n"
 
     prompt = f"""
-    You are an AI assistant helping users choose washing machines.
-    
+    You are a smart shopping assistant.
+
     User request: {user_input}
-    
-    Here are some recommended products:
-    {recommendations}
-    
-    Explain the recommendations in a friendly and helpful way.
-    Highlight why these are good choices.
+
+    Recommended products:
+    {recs_text}
+
+    Rules:
+    - Only consider products that match user type (top load / front load / fully automatic / semi automatic)
+    - Explain briefly why they match
+    - Keep response short (4-5 lines)
     """
 
-    # Try primary model with retries
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            return response.text
-
-        except Exception as e:
-            print(f"Attempt {attempt+1} failed: {e}")
-            time.sleep(5)  # wait before retry
-
-    # Fallback model (safer)
+    # 🟢 GROQ
     try:
-        print("Switching to fallback model...")
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
+        from groq import Groq
+        client = Groq(api_key=GROQ_API_KEY)
+
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}]
         )
-        return response.text
+
+        return response.choices[0].message.content
 
     except Exception as e:
-        print("Fallback also failed:", e)
+        print("Groq failed:", e)
 
-    # Final fallback (never crash your app)
-    return "⚠️ AI is currently busy. Please try again in a few seconds."
+    # 🔵 OLLAMA
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3",
+                "prompt": prompt[:2000],
+                "stream": False
+            }
+        )
 
+        return response.json()['response']
+
+    except Exception as e:
+        print("Ollama failed:", e)
+
+    return "⚠️ AI unavailable."
+
+
+# -------------------------------
+# 🧠 INPUT PROCESSING
+# -------------------------------
 def extract_details(text):
     text = text.lower()
-    
+
     budget = None
     family = None
     machine_type = None
-    
-    # 💰 Budget
+    load_type = None
     min_price = None
     max_price = None
 
-    # "between 10000 and 20000"
+    # 💰 Price
     match = re.search(r'between (\d+) and (\d+)', text)
     if match:
         min_price = int(match.group(1))
         max_price = int(match.group(2))
 
-    # "under 10000"
     match = re.search(r'under\s*(\d+)', text)
     if match:
         budget = int(match.group(1))
 
-    # "10k", "15k"
     match = re.search(r'(\d+)k', text)
     if match:
         budget = int(match.group(1)) * 1000
 
-    # "cheap"
     if "cheap" in text or "budget" in text:
         budget = 15000
-    
+
     # 👨‍👩‍👧‍👦 Family
+    match = re.search(r'(\d+)\s*(people|members|persons)', text)
+    if match:
+        family = int(match.group(1))
+
+    match = re.search(r'family of (\d+)', text)
+    if match:
+        family = int(match.group(1))
+
     if "small family" in text:
         family = 2
     elif "medium family" in text:
         family = 4
     elif "large family" in text:
         family = 6
-    else:
-        # Case 1: "2 people", "3 persons"
-        match = re.search(r'(\d+)\s*(people|persons|person|members)', text)
-        if match:
-            family = int(match.group(1))
-        
-        # Case 2: "family of 4"
-        match = re.search(r'family of (\d+)', text)
-        if match:
-            family = int(match.group(1))
-        
-        # Case 3: "for 2"
-        match = re.search(r'for\s*(\d+)',text)
-        if match:
-            family = int(match.group(1))
-    
-    # ⚙️ Type
+
+    # ⚙️ Machine Type
     if "fully automatic" in text:
         machine_type = "Fully Automatic"
     elif "semi automatic" in text:
         machine_type = "Semi Automatic"
-    
-    best = False
-    if "best" in text or "top" in text:
-        best = True
-    
-    return budget, family, machine_type, min_price, max_price, best
+
+    # 🔄 Load Type Detection (improved - catches more variations)
+    top_load_keywords = [
+        "top load", "top-load", "topload",
+        "top loading", "top-loading",
+        "tl ", " tl", "top loader"
+    ]
+    front_load_keywords = [
+        "front load", "front-load", "frontload",
+        "front loading", "front-loading",
+        "fl ", " fl", "front loader"
+    ]
+
+    for keyword in top_load_keywords:
+        if keyword in text:
+            load_type = "Top Load"
+            break
+
+    if load_type is None:
+        for keyword in front_load_keywords:
+            if keyword in text:
+                load_type = "Front Load"
+                break
+
+    best = "best" in text or "top rated" in text or "top-rated" in text
+
+    return budget, family, machine_type, min_price, max_price, best, load_type
 
 
 def family_to_capacity(family):
@@ -129,105 +154,155 @@ def family_to_capacity(family):
         return 8
 
 
-def recommend(df, budget, capacity, machine_type=None, min_price=None, max_price=None, best=False):
-    
+# -------------------------------
+# 🎯 RECOMMENDATION ENGINE
+# -------------------------------
+def recommend(df, budget, capacity, machine_type=None, min_price=None, max_price=None, best=False, load_type=None):
+
     filtered = df.copy()
-    
-    # Price filter
+
+    # Price
     if min_price and max_price:
         filtered = filtered[
             (filtered['Price'] >= min_price) &
             (filtered['Price'] <= max_price)
         ]
-    elif budget is not None:
-        filtered = filtered[
-            filtered['Price'] <= budget
-        ]
-    
-    # Capacity filter
-    filtered = filtered[
-        filtered['Washing Capacity'] >= capacity
-    ]
-    
-    # Type filter
+    elif budget:
+        filtered = filtered[filtered['Price'] <= budget]
+
+    # Capacity
+    filtered = filtered[filtered['Washing Capacity'] >= capacity]
+
+    # Machine Type
     if machine_type:
         filtered = filtered[
-            filtered['Function Type'].str.contains(machine_type, case=False)
+            filtered['Function Type'].str.contains(machine_type, case=False, na=False)
         ]
-    
+
+    # 🔄 Load Type Filter
+    if load_type:
+        filtered = filtered[
+            filtered['Function Type'].str.contains(load_type, case=False, na=False)
+        ]
+
+        if filtered.empty:
+            return pd.DataFrame()
+
     filtered = filtered.drop_duplicates(subset=['Model Name'])
-    
+
     if filtered.empty:
         return pd.DataFrame()
 
+    # Scoring
     filtered['Capacity Score'] = 1 / (abs(filtered['Washing Capacity'] - capacity) + 1)
-    
+
     filtered['Score'] = (
         filtered['Ratings'] * 0.6 +
         (1 / filtered['Price']) * 20000 +
         filtered['Capacity Score'] * 0.4
     )
-    
-    # 🔥 Step 4
+
     if best:
         filtered = filtered.sort_values(by='Ratings', ascending=False)
     else:
         filtered = filtered.sort_values(by='Score', ascending=False)
-    
-    top = filtered.head(4)
-    remaining = filtered.iloc[4:]
-    
-    extra = remaining.sample(min(len(remaining), 4)) if len(remaining) > 0 else remaining
-    
-    result = pd.concat([top, extra])
-    result = result.sample(frac=1)
-    
-    return result[['Product Name', 'Price', 'Ratings', 'Product_Url', 'Score']]
+
+    return filtered.head(6)[['Product Name', 'Price', 'Ratings', 'Product_Url', 'Function Type']]
 
 
 def chatbot_recommendation(df, text):
-    budget, family, machine_type, min_price, max_price, best = extract_details(text)
-    
+    budget, family, machine_type, min_price, max_price, best, load_type = extract_details(text)
+
     if family is None:
-        return None, None
-    
+        return None, None, None
+
     capacity = family_to_capacity(family)
-    
-    recs = recommend(df, budget, capacity, machine_type, min_price, max_price, best)
-    
-    ai_response = generate_ai_response(text, recs.to_string())
-    
-    return recs, ai_response
+
+    recs = recommend(df, budget, capacity, machine_type, min_price, max_price, best, load_type)
+
+    ai_response = generate_ai_response(text, recs)
+
+    # Build a summary of what filters were detected
+    detected = []
+    if load_type:
+        detected.append(f"🔄 Load Type: **{load_type}**")
+    if machine_type:
+        detected.append(f"⚙️ Type: **{machine_type}**")
+    if min_price and max_price:
+        detected.append(f"💰 Budget: **₹{min_price:,} – ₹{max_price:,}**")
+    elif budget:
+        detected.append(f"💰 Budget: **under ₹{budget:,}**")
+    if family:
+        detected.append(f"👨‍👩‍👧‍👦 Family Size: **{family} people → {family_to_capacity(family)} kg+**")
+
+    return recs, ai_response, detected
 
 
-# --- UI ---
+# -------------------------------
+# 🎨 UI
+# -------------------------------
+st.set_page_config(page_title="AI Washing Machine Recommender", page_icon="🧺")
 
 st.title("🧺 AI Washing Machine Recommender")
 st.markdown("### Tell me what you need 👇")
 
+st.info(
+    "💡 **Try queries like:**\n"
+    "- *Top load washing machine under 15000 for 3 people*\n"
+    "- *Front load fully automatic for family of 4*\n"
+    "- *Best semi automatic under 20k for large family*"
+)
 
-with st.form(key="input_form"):
+with st.form("form"):
     user_input = st.text_input("Describe what you want:")
     submit = st.form_submit_button("🔍 Get Recommendations")
 
 if submit:
-    recs, ai_text = chatbot_recommendation(df, user_input)
-    
-    if recs is None or recs.empty:
-        st.warning("No matching products found 😔 Try changing your input")
+
+    if user_input.strip() == "":
+        st.warning("Please enter something")
+
     else:
-        st.success("Here are some great options for you 👇")
-        
-        # 🤖 AI explanation
-        st.markdown("### 🤖 AI Recommendation Summary")
-        st.write(ai_text)
-        
-        st.markdown("---")
-        
-        # 📦 Product list
-        for _, row in recs.iterrows():
-            st.subheader(row['Product Name'])
-            st.write(f"💰 Price: ₹{int(row['Price'])}")
-            st.write(f"⭐ Rating: {row['Ratings']}")
-            st.markdown(f"🔗 [View Product]({row['Product_Url']})")
-            st.write("---")
+        with st.spinner("🤖 Finding best options..."):
+            recs, ai_text, detected = chatbot_recommendation(df, user_input)
+
+        # ✅ Show what the chatbot understood
+        if detected:
+            st.markdown("---")
+            st.markdown("### 🔍 What I Understood From Your Query")
+            cols = st.columns(len(detected))
+            for i, item in enumerate(detected):
+                cols[i].markdown(item)
+
+        if recs is None or recs.empty:
+            st.warning("No exact matching products found 😔 Try relaxing filters (e.g. remove load type or increase budget)")
+        else:
+            st.success(f"Found **{len(recs)}** matching products 👇")
+
+            st.markdown("### 🤖 AI Recommendation Summary")
+            st.write(ai_text)
+
+            st.markdown("---")
+            st.markdown("### 📦 Recommended Products")
+
+            for _, row in recs.iterrows():
+                with st.container():
+                    st.subheader(row['Product Name'])
+
+                    # Show the machine type badge from dataset
+                    func_type = str(row.get('Function Type', ''))
+                    if func_type and func_type != 'nan':
+                        if "Top Load" in func_type:
+                            st.markdown("🔼 `Top Load`", unsafe_allow_html=False)
+                        elif "Front Load" in func_type:
+                            st.markdown("⬅️ `Front Load`", unsafe_allow_html=False)
+
+                        if "Fully Automatic" in func_type:
+                            st.markdown("✅ `Fully Automatic`", unsafe_allow_html=False)
+                        elif "Semi Automatic" in func_type:
+                            st.markdown("🔧 `Semi Automatic`", unsafe_allow_html=False)
+
+                    st.write(f"💰 Price: ₹{int(row['Price'])}")
+                    st.write(f"⭐ Rating: {row['Ratings']}")
+                    st.markdown(f"🔗 [View Product]({row['Product_Url']})")
+                    st.write("---")
