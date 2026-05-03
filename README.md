@@ -9,7 +9,7 @@ This project combines data-driven filtering with a conversational AI interface t
 ## 🚀 Features
 
 * 🔍 Smart recommendation system based on user input
-* 🤖 AI-generated explanations using Google Gemini API
+* 🤖 AI-generated explanations using API
 * 📊 Data filtering and ranking of products
 * 💬 Interactive UI built with Streamlit
 * ⚡ Real-time responses with fallback handling
@@ -21,7 +21,7 @@ This project combines data-driven filtering with a conversational AI interface t
 * Python
 * Pandas & NumPy
 * Streamlit
-* Google Gemini API (Generative AI)
+* Groq & Ollama API (Generative AI)
 
 ---
 
@@ -36,7 +36,7 @@ This project combines data-driven filtering with a conversational AI interface t
 
 ## 📌 Note
 
-This project uses the Google Gemini API.
+This project uses the Groq API.
 You must provide your own API key to run the application (see setup instructions).
 
 ---
