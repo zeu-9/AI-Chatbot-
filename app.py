@@ -4,7 +4,7 @@ import re
 import requests
 
 # 🔑 ADD YOUR GROQ KEY
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "GROK_API_KEY_HERE"
 
 df = pd.read_csv("cleaned_washingmachine.csv")
 
