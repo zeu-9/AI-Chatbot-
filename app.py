@@ -2,9 +2,11 @@ import streamlit as st
 import pandas as pd
 import re
 import requests
+import os
 
 # 🔑 ADD YOUR GROQ KEY
-GROQ_API_KEY = "GROK_API_KEY_HERE"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# GROQ_API_KEY = None  # Set to None if you don't have a key or want to test Ollama only
 
 df = pd.read_csv("cleaned_washingmachine.csv")
 
@@ -14,21 +16,66 @@ df = pd.read_csv("cleaned_washingmachine.csv")
 def generate_ai_response(user_input, recs):
 
     recs_text = ""
-    for _, row in recs.iterrows():
-        recs_text += f"{row['Product Name']} (₹{int(row['Price'])}, Rating: {row['Ratings']})\n"
+    for i, (_, row) in enumerate(recs.iterrows(), 1):
+        recs_text += f"{i}. {row['Product Name']} (₹{int(row['Price'])}, Rating: {row['Ratings']}/5, Type: {row['Function Type']})\n"
 
     prompt = f"""
-    You are a smart shopping assistant.
+    You are an expert home appliance consultant with deep knowledge of washing machines.
+    A customer has come to you for personalized advice.
 
-    User request: {user_input}
+    Customer's Request: {user_input}
 
-    Recommended products:
+    Products shortlisted for this customer:
     {recs_text}
 
+    Your job is to write a detailed, helpful buying guide for THIS customer based on THEIR specific request.
+    Structure your response EXACTLY as follows, with a blank line between every section:
+
+    🏆 BEST PICK FOR YOU:
+    [One sentence recommending the best product and why it suits this customer.]
+
+    ---
+
+    📦 PRODUCT-BY-PRODUCT BREAKDOWN:
+
+    For EACH product write it in this EXACT format with each point on a NEW LINE:
+
+    🔹 [Product Name]
+    ✅ Advantages:
+    • [Advantage 1]
+    • [Advantage 2]
+    • [Advantage 3]
+    ❌ Disadvantages:
+    • [Disadvantage 1]
+    • [Disadvantage 2]
+    🎯 Best suited for: [Describe ideal customer in one line]
+
+    [Repeat above block for every product with a blank line between each]
+
+    ---
+
+    💡 SITUATION GUIDE — WHEN TO CHOOSE WHAT:
+    • If you have a large family with heavy daily laundry → [recommendation]
+    • If you live in an apartment with low water pressure → [recommendation]
+    • If energy bill is a concern → [recommendation]
+    • If you hand wash delicates often → [recommendation]
+
+    ---
+
+    ⚠️ THINGS TO WATCH OUT FOR:
+    • [Mistake 1]
+    • [Mistake 2]
+    • [Mistake 3]
+
     Rules:
-    - Only consider products that match user type (top load / front load / fully automatic / semi automatic)
-    - Explain briefly why they match
-    - Keep response short (4-5 lines)
+    - Be specific to the products listed above, do not invent or suggest products not in the list
+    - Use the customer's budget and family context from their request throughout your response
+    - Speak directly to the customer using "you" and "your"
+    - Keep the tone friendly, expert, and honest — like a trusted advisor, not a salesman
+    - Every bullet point MUST be on its own new line
+    - Every section MUST be separated by a blank line
+    - Do not put multiple points on the same line
+    - Total response should be 250-320 words
     """
 
     # 🟢 GROQ
@@ -38,7 +85,18 @@ def generate_ai_response(user_input, recs):
 
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}]
+            max_tokens=1024,        # ← fixed from 600
+            temperature=0.7,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert home appliance consultant. You give honest, detailed, structured buying advice. You always consider the customer's specific situation — their family size, budget, and usage needs — before recommending anything."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         )
 
         return response.choices[0].message.content
@@ -51,19 +109,29 @@ def generate_ai_response(user_input, recs):
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={
-                "model": "llama3",
-                "prompt": prompt[:2000],
-                "stream": False
-            }
+                "model": "llama3.1",
+                "prompt": prompt[:5000],
+                "stream": False,
+               "options": {
+               "temperature": 0.5,
+               "num_predict": 1024,
+               "num_ctx": 8192       # ← ADD THIS — increases context window
+               }
+            },
+            timeout=60
         )
 
-        return response.json()['response']
+        result = response.json()
+
+        if 'response' in result:
+            return result['response']
+        else:
+            print("Ollama returned unexpected format:", result)
 
     except Exception as e:
         print("Ollama failed:", e)
 
-    return "⚠️ AI unavailable."
-
+    return "⚠️ AI unavailable. Please check your Groq API key or ensure Ollama is running locally."
 
 # -------------------------------
 # 🧠 INPUT PROCESSING
@@ -279,30 +347,47 @@ if submit:
         else:
             st.success(f"Found **{len(recs)}** matching products 👇")
 
-            st.markdown("### 🤖 AI Recommendation Summary")
-            st.write(ai_text)
+    st.markdown("### 🤖 AI Recommendation Summary")
+    with st.container():
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #1a1a2e;
+                border-left: 4px solid #e94560;
+                border-radius: 10px;
+                padding: 20px 25px;
+                color: #e8eaf6;
+                font-size: 15px;
+                line-height: 1.8;
+                white-space: pre-wrap;
+            ">
+    {ai_text}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-            st.markdown("---")
-            st.markdown("### 📦 Recommended Products")
+    st.markdown("---")
+    st.markdown("### 📦 Recommended Products")
 
-            for _, row in recs.iterrows():
-                with st.container():
-                    st.subheader(row['Product Name'])
+    for _, row in recs.iterrows():
+        with st.container():
+            st.subheader(row['Product Name'])
 
-                    # Show the machine type badge from dataset
-                    func_type = str(row.get('Function Type', ''))
-                    if func_type and func_type != 'nan':
-                        if "Top Load" in func_type:
-                            st.markdown("🔼 `Top Load`", unsafe_allow_html=False)
-                        elif "Front Load" in func_type:
-                            st.markdown("⬅️ `Front Load`", unsafe_allow_html=False)
+            # Show the machine type badge from dataset
+            func_type = str(row.get('Function Type', ''))
+            if func_type and func_type != 'nan':
+                if "Top Load" in func_type:
+                    st.markdown("🔼 `Top Load`", unsafe_allow_html=False)
+                elif "Front Load" in func_type:
+                    st.markdown("⬅️ `Front Load`", unsafe_allow_html=False)
 
-                        if "Fully Automatic" in func_type:
-                            st.markdown("✅ `Fully Automatic`", unsafe_allow_html=False)
-                        elif "Semi Automatic" in func_type:
-                            st.markdown("🔧 `Semi Automatic`", unsafe_allow_html=False)
+                if "Fully Automatic" in func_type:
+                    st.markdown("✅ `Fully Automatic`", unsafe_allow_html=False)
+                elif "Semi Automatic" in func_type:
+                    st.markdown("🔧 `Semi Automatic`", unsafe_allow_html=False)
 
-                    st.write(f"💰 Price: ₹{int(row['Price'])}")
-                    st.write(f"⭐ Rating: {row['Ratings']}")
-                    st.markdown(f"🔗 [View Product]({row['Product_Url']})")
-                    st.write("---")
+            st.write(f"💰 Price: ₹{int(row['Price'])}")
+            st.write(f"⭐ Rating: {row['Ratings']}")
+            st.markdown(f"🔗 [View Product]({row['Product_Url']})")
+            st.write("---")
